@@ -1,0 +1,122 @@
+import requests
+import pandas as pd
+from datetime import datetime
+from google.colab import files
+
+# Set up GitHub token for authenticated requests to avoid rate limits
+GITHUB_TOKEN = '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'  # Replace with your actual GitHub token
+HEADERS = {'Authorization': f'token {GITHUB_TOKEN}'} if GITHUB_TOKEN else {}
+
+# Constants
+CITY = 'Hyderabad'
+# Use a single range to get all users with more than 50 followers
+FOLLOWER_MIN = 50
+
+# Helper function for company name cleaning
+def clean_company_name(company):
+    if company:
+        company = company.strip()
+        if company.startswith('@'):
+            company = company[1:]
+        return company.upper()
+    return ''
+
+# Step 1: Retrieve users in the specified city with more than 50 followers
+def get_users(city, follower_min):
+    page = 1
+    users = []
+    while True:
+        url = f"https://api.github.com/search/users?q=location:{city}+followers:>{follower_min}&per_page=100&page={page}"
+        response = requests.get(url, headers=HEADERS)
+        if response.status_code != 200:
+            break  # Stop if there is an error with the request
+        data = response.json().get('items', [])
+        if not data:
+            break
+        users.extend(data)
+        if len(data) < 100:  # Exit loop if fewer than 100 results
+            break
+        page += 1
+    return users
+
+# Step 2: Gather detailed user data and repositories
+def get_user_details(user_login):
+    url = f"https://api.github.com/users/{user_login}"
+    response = requests.get(url, headers=HEADERS)
+    return response.json()
+
+def get_user_repositories(user_login):
+    repos = []
+    page = 1
+    while True:
+        url = f"https://api.github.com/users/{user_login}/repos?sort=pushed&per_page=100&page={page}"
+        response = requests.get(url, headers=HEADERS)
+        data = response.json()
+        if not data:
+            break
+        repos.extend(data)
+        if len(repos) >= 500:
+            break  # Limit to 500 repositories per user
+        page += 1
+    return repos[:500]
+
+# Initialize data storage
+user_data = []
+repo_data = []
+unique_users = set()
+
+# Collect all users with more than 50 followers
+users = get_users(CITY, FOLLOWER_MIN)
+for user in users:
+    if user['login'] not in unique_users:  # Ensure uniqueness
+        unique_users.add(user['login'])
+        user_detail = get_user_details(user['login'])
+        user_data.append({
+            'login': user_detail.get('login', ''),
+            'name': user_detail.get('name', ''),
+            'company': clean_company_name(user_detail.get('company', '')),
+            'location': user_detail.get('location', ''),
+            'email': user_detail.get('email', ''),
+            'hireable': user_detail.get('hireable', ''),
+            'bio': user_detail.get('bio', ''),
+            'public_repos': user_detail.get('public_repos', 0),
+            'followers': user_detail.get('followers', 0),
+            'following': user_detail.get('following', 0),
+            'created_at': user_detail.get('created_at', '')
+        })
+
+        # Collect repository data for each user
+        repos = get_user_repositories(user['login'])
+        for repo in repos:
+            repo_data.append({
+                'login': user['login'],
+                'full_name': repo.get('full_name', ''),
+                'created_at': repo.get('created_at', ''),
+                'stargazers_count': repo.get('stargazers_count', 0),
+                'watchers_count': repo.get('watchers_count', 0),
+                'language': repo.get('language', ''),
+                'has_projects': repo.get('has_projects', False),
+                'has_wiki': repo.get('has_wiki', False),
+                'license_name': repo.get('license', {}).get('key') if repo.get('license') else ''
+            })
+
+# Step 3: Save data to CSV files
+users_df = pd.DataFrame(user_data)
+repos_df = pd.DataFrame(repo_data)
+
+users_df.to_csv('users.csv', index=False)
+repos_df.to_csv('repositories.csv', index=False)
+
+# Step 4: Create README.md
+readme_content = """
+* This script uses the GitHub API to collect user and repository data for developers in Hyderabad.
+* The data includes users with more than 50 followers and their public repositories.
+* Developers are encouraged to engage with open-source projects to enhance their visibility.
+"""
+with open("README.md", "w") as f:
+    f.write(readme_content)
+
+# Step 5: Download files
+files.download("users.csv")
+files.download("repositories.csv")
+files.download("README.md")
